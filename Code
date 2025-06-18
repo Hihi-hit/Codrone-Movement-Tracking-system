@@ -1,0 +1,158 @@
+import cv2
+import mediapipe as mp
+import time
+from codrone_edu.drone import *
+import numpy as np
+
+
+drone = Drone()
+drone.pair()
+
+class PoseDetector:
+    def __init__(self, video_source=0, detection_confidence=0.3, tracking_confidence=0.3):
+        self.video_source = video_source
+        self.detection_confidence = detection_confidence
+        self.tracking_confidence = tracking_confidence
+
+        # Initialize Mediapipe
+        self.mp_drawing = mp.solutions.drawing_utils
+        self.mp_pose = mp.solutions.pose
+        self.pose = self.mp_pose.Pose(min_detection_confidence=self.detection_confidence,
+                                      min_tracking_confidence=self.tracking_confidence)
+
+        self.cap = cv2.VideoCapture(self.video_source)
+        self.action_1_angle = None
+        self.action_2_angle = None
+        self.action_3_angle = None
+        self.action_4_angle = None
+        self.action_5_angle = None
+        self.action_6_angle = None
+        self.action = None
+
+    def calculate_angle(self, landmark1, landmark2, landmark3):
+        # Create vectors
+        vector1 = landmark1 - landmark2
+        vector2 = landmark2 - landmark3
+
+        # Normalize the vectors
+        vector1_norm = vector1 / np.linalg.norm(vector1)
+        vector2_norm = vector2 / np.linalg.norm(vector2)
+
+        # Calculate the dot product and the angle in radians
+        dot_product = np.dot(vector1_norm, vector2_norm)
+        angle_rad = np.arccos(np.clip(dot_product, -1.0, 1.0))
+
+        # Convert the angle to degrees
+        angle_deg = 180-np.degrees(angle_rad)
+
+        return angle_deg
+
+
+    def analyze_pose(self):
+        # Capture frames from the webcam to detect the pose
+        ret, frame = self.cap.read()
+        if not ret:
+            print("Failed to capture image")
+            return None
+
+        # Recolor image to RGB
+        image = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        image.flags.writeable = False
+
+        # Make detection
+        results = self.pose.process(image)
+
+        # Recolor back to BGR
+        image.flags.writeable = True
+        image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
+
+        # Extract landmarks and draw them
+        if results.pose_landmarks is not None:
+            landmarks = results.pose_landmarks.landmark
+
+            # Draw the landmarks
+            self.mp_drawing.draw_landmarks(image, results.pose_landmarks, self.mp_pose.POSE_CONNECTIONS)
+
+
+            LEFTwrist = np.array([landmarks[self.mp_pose.PoseLandmark.LEFT_WRIST.value].x,
+                              landmarks[self.mp_pose.PoseLandmark.LEFT_WRIST.value].y])
+            RIGHTwrist = np.array([landmarks[self.mp_pose.PoseLandmark.RIGHT_WRIST.value].x,
+                              landmarks[self.mp_pose.PoseLandmark.RIGHT_WRIST.value].y])
+            RIGHTshoulder = np.array([landmarks[self.mp_pose.PoseLandmark.RIGHT_SHOULDER.value].x,
+                              landmarks[self.mp_pose.PoseLandmark.RIGHT_SHOULDER.value].y])
+            LEFTshoulder = np.array([landmarks[self.mp_pose.PoseLandmark.LEFT_SHOULDER.value].x,
+                              landmarks[self.mp_pose.PoseLandmark.LEFT_SHOULDER.value].y])
+            RIGHTelbow = np.array([landmarks[self.mp_pose.PoseLandmark.RIGHT_ELBOW.value].x,
+                              landmarks[self.mp_pose.PoseLandmark.RIGHT_ELBOW.value].y])
+            LEFTelbow = np.array([landmarks[self.mp_pose.PoseLandmark.LEFT_ELBOW.value].x,
+                              landmarks[self.mp_pose.PoseLandmark.LEFT_ELBOW.value].y])
+            RIGHThip = np.array([landmarks[self.mp_pose.PoseLandmark.RIGHT_HIP.value].x,
+                              landmarks[self.mp_pose.PoseLandmark.RIGHT_HIP.value].y])
+            LEFThip = np.array([landmarks[self.mp_pose.PoseLandmark.LEFT_HIP.value].x,
+                              landmarks[self.mp_pose.PoseLandmark.LEFT_HIP.value].y])
+            LEFTknee = np.array([landmarks[self.mp_pose.PoseLandmark.LEFT_KNEE.value].x,
+                              landmarks[self.mp_pose.PoseLandmark.LEFT_KNEE.value].y])
+            RIGHTknee = np.array([landmarks[self.mp_pose.PoseLandmark.RIGHT_KNEE.value].x,
+                              landmarks[self.mp_pose.PoseLandmark.RIGHT_KNEE.value].y])
+            LEFTankle = np.array([landmarks[self.mp_pose.PoseLandmark.LEFT_ANKLE.value].x,
+                              landmarks[self.mp_pose.PoseLandmark.LEFT_ANKLE.value].y])
+            RIGHTankle = np.array([landmarks[self.mp_pose.PoseLandmark.RIGHT_ANKLE.value].x,
+                              landmarks[self.mp_pose.PoseLandmark.RIGHT_ANKLE.value].y])
+            
+
+            # Calculate the angle
+            self.action_1_angle = self.calculate_angle(RIGHTelbow, RIGHTshoulder, RIGHThip)
+            self.action_2_angle = self.calculate_angle(LEFTelbow, LEFTshoulder, LEFThip)
+            self.action_3_angle = self.calculate_angle(RIGHTwrist, RIGHTelbow, RIGHTshoulder)
+            self.action_4_angle = self.calculate_angle(LEFTwrist, LEFTelbow, LEFTshoulder)
+            self.action_5_angle = self.calculate_angle(LEFThip, LEFTknee, LEFTankle)
+            self.action_6_angle = self.calculate_angle(RIGHThip, RIGHTknee, RIGHTankle)
+
+            # Analyze the angle
+            if self.action_1_angle >= 90:
+                self.action = "Takeoff"
+                drone.takeoff()
+            elif self.action_2_angle >= 90:
+                self.action = "Land"
+                drone.land()
+            elif self.action_3_angle <= 90:
+                self.action = "Move Forward"
+                drone.move_forward(distance=50,units="cm",speed=100)
+            elif self.action_4_angle <= 90:
+                self.action = "Move Backward"
+                drone.move_backward(distance=50,units="cm",speed=100)
+            elif self.action_5_angle <=90:
+                self.action = "Move Left"
+                drone.move_left(distance=50, units="cm", speed=100)
+            elif self.action_6_angle <=90:
+                self.action = "Move Right"
+                drone.move_right(distance=50, units="cm", speed=100)
+
+        # Display the resulting frame
+        cv2.putText(image, f'Action: {self.action}', (10, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+        print(self.action)
+        cv2.imshow('Pose Detection', image)
+
+        return self.action
+
+    def release(self):
+        self.cap.release()
+        cv2.destroyAllWindows()
+
+
+
+# Example usage:
+if __name__ == "__main__":
+    pose_detector = PoseDetector(video_source=0)
+
+    while True:
+        action = pose_detector.analyze_pose()
+
+        # Break the loop on 'q' key press
+        if cv2.waitKey(1) & 0xFF == ord('q'):
+            break
+
+        time.sleep(0.05)
+        
+
+    pose_detector.release()
